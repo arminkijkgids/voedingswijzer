@@ -6,6 +6,8 @@
 </section><div id="score" class="score"></div><div class="bar"><div id="fill" class="fill"></div></div><p id="verdict"></p><p id="origin" class="muted"></p><div id="facts" class="grid"></div><h3>Beoordeling</h3><ul id="notes"></ul><p class="muted"><small>Indicatieve voedingskundige beoordeling, geen medische uitspraak. Een productscore vervangt geen beoordeling van het totale eetpatroon.</small></p></section></main><script>
 const produce=[['Appel',52,10.4,0.1,0.0,2.4,0.0],['Banaan',89,12.2,1.1,0.1,2.6,0.0],['Avocado',160,0.7,2.0,2.1,6.7,0.0],['Broccoli',34,1.7,2.8,0.0,2.6,0.03],['Wortel',41,4.8,0.9,0.0,2.8,0.07],['Spinazie',23,0.4,2.9,0.1,2.2,0.08],['Blauwe bessen',57,10.0,0.7,0.0,2.4,0.0],['Tomaat',18,2.6,0.9,0.0,1.2,0.01],['Mango',60,13.7,0.8,0.1,1.6,0.0],['Komkommer',15,1.7,0.7,0.0,0.5,0.0],['Zoete aardappel',86,4.2,1.6,0.0,3.0,0.06],['Bloemkool',25,1.9,1.9,0.1,2.0,0.03],['Aardbei',32,4.9,0.7,0.0,2.0,0.0],['Sinaasappel',47,9.4,0.9,0.0,2.4,0.0],['Peer',57,9.8,0.4,0.0,3.1,0.0]];
 let stream=null,detector=null,scanning=false;
+let scanStarting = false;
+let scanTicket = 0;
 function tab(t){document.getElementById('barcode').hidden=t!=='barcode';document.getElementById('produce').hidden=t!=='produce';stopScan();setStatus('')}
 function setStatus(s){document.getElementById('status').textContent=s}
 function searchProduce(){let q=document.getElementById('q').value.trim().toLowerCase();let matches=produce.filter(p=>p[0].toLowerCase().includes(q));document.getElementById('matches').innerHTML=matches.map(p=>`<button style="margin:5px" onclick="showProduce('${p[0]}')">${p[0]}</button>`).join('')||'Niet in de lokale lijst.'}
@@ -31,7 +33,71 @@ function renderNutriScore(product) {
     : grade + ' — ' + labels[index] + ' samenstelling binnen deze productgroep.';
 }
 function render(p){renderNutriScore(p);let e=evaluate(p);document.getElementById('result').style.display='block';document.getElementById('name').textContent=p.name;document.getElementById('score').textContent=e.score===null?'Geen score':e.score+'/100';document.getElementById('fill').style.width=(e.score||0)+'%';document.getElementById('fill').style.background=e.score===null?'#999':e.score>=75?'#198b58':e.score>=50?'#d59a20':'#c7503f';document.getElementById('verdict').textContent=e.score===null?'Onvoldoende gegevens':e.score>=75?'Gunstig volgens voorlopige beoordelingsregels':e.score>=50?'Gemengd voedingsprofiel':'Minder gunstig volgens voorlopige beoordelingsregels';document.getElementById('origin').textContent=p.source;document.getElementById('facts').innerHTML=[['Energie',p.kcal,'kcal'],['Suikers',p.sugar,'g'],['Eiwitten',p.protein,'g'],['Verzadigd vet',p.sat,'g'],['Vezels',p.fiber,'g'],['Zout',p.salt,'g']].map(([k,v,u])=>`<div class="item"><small>${k} / 100 g</small><br><strong>${v===null||v===undefined?'Onbekend':Number(v).toLocaleString('nl-NL',{maximumFractionDigits:1})+' '+u}</strong></div>`).join('');document.getElementById('notes').innerHTML=e.notes.map(n=>'<li>'+n.replaceAll('&','&amp;').replaceAll('<','&lt;')+'</li>').join('');document.getElementById('result').scrollIntoView({behavior:'smooth',block:'start'})}
-async function scan(){if(!('BarcodeDetector'in window)){setStatus('Deze browser ondersteunt geen directe barcodescan. Voer de barcode handmatig in.');return}try{detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e']});stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});let v=document.getElementById('video');v.srcObject=stream;v.style.display='block';document.getElementById('stop').style.display='inline-block';await v.play();scanning=true;setStatus('Richt de camera op de barcode.');scanFrame()}catch(e){setStatus('Camera niet beschikbaar of toestemming geweigerd.');stopScan()}}
-async function scanFrame(){if(!scanning)return;try{let b=await detector.detect(document.getElementById('video'));if(b.length){let code=b[0].rawValue;document.getElementById('code').value=code;stopScan();lookup(code);return}}catch(e){}setTimeout(scanFrame,350)}
-function stopScan(){scanning=false;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}let v=document.getElementById('video');v.style.display='none';v.srcObject=null;document.getElementById('stop').style.display='none'}searchProduce();
+async function scan() {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    setStatus('Open de HTTPS-link van Voedingswijzer rechtstreeks in je browser.');
+    return;
+  }
+  if (scanning || scanStarting) return;
+  scanStarting = true;
+  const ticket = ++scanTicket;
+  let phase = 'reader';
+  try {
+    setStatus('Barcodescanner voorbereiden…');
+    const wanted = ['ean_13', 'ean_8', 'upc_a', 'upc_e'];
+    let Reader = window.BarcodeDetector;
+    let formats = [];
+    try { if (Reader) formats = (await Reader.getSupportedFormats()).filter(f => wanted.includes(f)); } catch {}
+    if (!formats.includes('ean_13') || !formats.includes('ean_8')) {
+      ({ BarcodeDetector: Reader } = await import('https://fastly.jsdelivr.net/npm/barcode-detector@3.2.4/dist/es/ponyfill.min.js'));
+      formats = wanted;
+    }
+    if (ticket !== scanTicket) return;
+    detector = new Reader({ formats });
+    phase = 'camera';
+    const camera = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}});
+    if (ticket !== scanTicket) { camera.getTracks().forEach(track => track.stop()); return; }
+    stream = camera;
+    const video = document.getElementById('video');
+    video.srcObject = stream;
+    video.style.display = 'block';
+    document.getElementById('stop').style.display = 'inline-block';
+    await video.play();
+    if (ticket !== scanTicket) return;
+    scanning = true;
+    setStatus('Richt de camera op de barcode.');
+    scanFrame(ticket);
+  } catch (error) {
+    if (ticket !== scanTicket) return;
+    stopScan();
+    setStatus(phase === 'reader' ? 'De barcodescanner kon niet worden geladen. Voer de barcode handmatig in.' : error.name === 'NotAllowedError' ? 'Geef deze site cameratoegang in de browserinstellingen.' : 'Camera niet beschikbaar. Voer de barcode handmatig in.');
+  } finally {
+    if (ticket === scanTicket) scanStarting = false;
+  }
+}
+async function scanFrame(ticket) {
+  if (!scanning || ticket !== scanTicket) return;
+  const video = document.getElementById('video');
+  try {
+    if (video.readyState >= 2) {
+      const barcodes = await detector.detect(video);
+      if (ticket !== scanTicket) return;
+      const barcode = barcodes.find(item => /^\d{8,14}$/.test(item.rawValue));
+      if (barcode) {
+        document.getElementById('code').value = barcode.rawValue;
+        lookup(barcode.rawValue);
+        return;
+      }
+    }
+  } catch (error) {
+    if (ticket !== scanTicket) return;
+    if (error.name !== 'InvalidStateError') {
+      stopScan();
+      setStatus('Barcodes lezen mislukt. Voer de barcode handmatig in.');
+      return;
+    }
+  }
+  setTimeout(() => scanFrame(ticket), 350);
+}
+function stopScan(){scanTicket++;scanStarting=false;scanning=false;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}let v=document.getElementById('video');v.style.display='none';v.srcObject=null;document.getElementById('stop').style.display='none'}searchProduce();
 </script></body></html>
