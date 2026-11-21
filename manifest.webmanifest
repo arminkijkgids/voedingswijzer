@@ -1,0 +1,14 @@
+{
+  "id": "./",
+  "name": "Voedingswijzer",
+  "short_name": "Voedingswijzer",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7f2",
+  "theme_color": "#123b2c",
+  "icons": [
+    {"src":"voedingswijzer-192.png","sizes":"192x192","type":"image/png"},
+    {"src":"voedingswijzer-512.png","sizes":"512x512","type":"image/png"}
+  ]
+}
